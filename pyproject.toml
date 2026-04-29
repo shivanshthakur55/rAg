@@ -22,4 +22,5 @@ dependencies = [
     "sentence-transformers>=5.4.1",
     "transformers>=5.5.4",
     "uvicorn[standard]>=0.44.0",
+    "python-dateutil>=2.9.0",
 ]

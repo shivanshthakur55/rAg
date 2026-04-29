@@ -1,10 +1,10 @@
 """
-RAG Engine — Handles document ingestion and conversational Q&A.
+RAG Engine — Handles PDF/Document ingestion and conversational Q&A.
 
-Design choices matching the notebook (3.0_multi_docs.ipynb):
-- HuggingFaceEmbeddings (all-mpnet-base-v2) — same as notebook
-- Chroma with persist_directory — vectors survive server restarts
-- Each uploaded file gets its own collection (session_id)
+Design choices:
+- HuggingFaceEmbeddings (all-mpnet-base-v2)
+- Chroma persisted under Vector/pdf_documents/ (separate from invoices)
+- Each uploaded file gets its own Chroma collection (session_id)
 - ChatGroq (llama-3.3-70b-versatile) as the LLM
 - LCEL chain with message-history for follow-up question support
 """
@@ -27,7 +27,9 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 load_dotenv()
 
 # ── Constants ─────────────────────────────────────────────────────────────────
-VECTOR_DIR = Path(__file__).parent.parent / "Vector"
+# Separate from invoices collection which lives in Vector/invoices/
+VECTOR_DIR = Path(__file__).parent.parent / "Vector" / "pdf_documents"
+VECTOR_DIR.mkdir(parents=True, exist_ok=True)
 CHUNK_SIZE = 800
 CHUNK_OVERLAP = 200
 
@@ -121,16 +123,12 @@ _contextualize_prompt = ChatPromptTemplate.from_messages([
 
 _qa_prompt = ChatPromptTemplate.from_messages([
     ("system",
-     "You are an expert research assistant. The user has uploaded a document "
-     "and you must answer their questions based ONLY on the provided context.\n\n"
-     "Guidelines for your answers:\n"
-     "- Be thorough, detailed, and comprehensive — never truncate your response.\n"
-     "- Structure your answer clearly using paragraphs, numbered lists, or bullet points where appropriate.\n"
-     "- Quote or closely paraphrase relevant passages from the context to support your answer.\n"
-     "- If multiple aspects of the question can be addressed, cover all of them.\n"
-     "- If the answer is not present in the context, say so clearly and explain what IS available.\n"
-     "- Do NOT add information from outside the provided context.\n\n"
-     "Context from document:\n{context}"),
+     "Expert research assistant. Answer ONLY using provided context. No outside info.\n\n"
+     "- Use bullet points for clarity.\n"
+     "- Be concise: provide short, direct answers. Ask 'Do you need more information?' and stop. Provide thorough details ONLY if the user says yes.\n"
+     "- Quote context to support answers. Address all query aspects.\n"
+     "- If the answer is missing, state what is available in the context instead.\n\n"
+     "Context:\n{context}"),
     MessagesPlaceholder("chat_history"),
     ("human", "{input}"),
 ])
