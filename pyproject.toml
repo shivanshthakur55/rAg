@@ -1,7 +1,7 @@
 [project]
 name = "rag2"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Dual-mode RAG: Universal Document Q&A + Invoice Analyzer"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
@@ -23,4 +23,13 @@ dependencies = [
     "transformers>=5.5.4",
     "uvicorn[standard]>=0.44.0",
     "python-dateutil>=2.9.0",
+    # --- Multi-format document support ---
+    "pytesseract>=0.3.13",       # OCR wrapper for Tesseract
+    "pymupdf>=1.24.0",            # PDF rendering to images for OCR (no Poppler needed)
+    "Pillow>=11.0.0",            # Image processing
+    "openpyxl>=3.1.5",           # Excel .xlsx read/write
+    "pandas>=2.2.0",             # Excel/CSV data manipulation
+    "python-pptx>=1.0.2",        # PowerPoint .pptx reading
+    "xlrd>=2.0.1",               # Legacy Excel .xls support
+    "pymupdf>=1.27.2.3",
 ]

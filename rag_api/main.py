@@ -1,17 +1,19 @@
 """
 FastAPI entrypoint for the Dual-Mode RAG Application.
 
-PDF/Document RAG Mode (existing — backward compatible):
+PDF/Document RAG Mode (universal — all formats):
   GET  /              — serve the dual-mode chat UI
-  POST /upload        — upload & ingest a PDF/TXT/DOCX document
-  POST /chat          — Q&A against an ingested document session
+  POST /upload        — upload & ingest any supported document
+  POST /chat          — Q&A against a specific document session
+  POST /chat/all      — Q&A across ALL uploaded documents (no selection needed)
   GET  /sessions      — list all ingested document sessions
   POST /clear/{id}    — clear chat history for a session
+  POST /clear-all     — clear the cross-document search history
 
-Invoice RAG Mode (new):
-  POST /invoice/upload    — upload & ingest an invoice PDF
-  POST /invoice/query     — query invoices (hybrid: semantic + metadata)
-  POST /invoice/compare   — compare two invoices with LLM explanation
+Invoice RAG Mode:
+  POST /invoice/upload    — upload & ingest an invoice PDF (OCR-capable)
+  POST /invoice/query     — query ALL invoices (semantic + metadata); no selection needed
+  POST /invoice/compare   — compare invoices; auto-finds best pair from query
   GET  /invoice/list      — list all stored invoices
   GET  /invoice/{id}      — fetch a single invoice by ID
   DELETE /invoice/{id}    — delete an invoice
@@ -26,18 +28,22 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from typing import Optional
 
 from rag_api import invoice_db
 from rag_api.invoice_engine import (
     answer_invoice_query,
     compare_invoices,
     ingest_invoice,
+    hybrid_invoice_search,
     _record_to_dict,
 )
 from rag_api.models import InvoiceCompareRequest, InvoiceQueryRequest
 from rag_api.query_parser import parse_query
 from rag_api.rag_engine import (
     chat,
+    chat_all,
+    clear_all_history,
     clear_session_history,
     ingest_document,
     list_sessions,
@@ -46,8 +52,11 @@ from rag_api.rag_engine import (
 # ── App setup ─────────────────────────────────────────────────────────────────
 app = FastAPI(
     title="Dual-Mode RAG API",
-    version="2.0.0",
-    description="Document Q&A + Invoice Analysis in one application.",
+    version="2.1.0",
+    description=(
+        "Universal Document Q&A (PDF/Excel/Word/CSV/PPTX/Images) "
+        "+ Invoice Analysis in one application."
+    ),
 )
 
 app.add_middleware(
@@ -71,6 +80,25 @@ STATIC_DIR.mkdir(exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
+# Supported document extensions
+ALLOWED_DOC_EXTENSIONS = {
+    ".pdf",   # digital PDFs
+    ".txt",   # plain text
+    ".docx",  # Word
+    ".doc",   # Word (legacy)
+    ".xlsx",  # Excel
+    ".xls",   # Excel (legacy)
+    ".csv",   # Comma-separated values
+    ".pptx",  # PowerPoint
+    ".ppt",   # PowerPoint (legacy)
+    ".jpg",   # JPEG image (OCR)
+    ".jpeg",
+    ".png",   # PNG image (OCR)
+    ".tiff",  # TIFF image (OCR)
+    ".bmp",   # BMP image (OCR)
+    ".webp",  # WebP image (OCR)
+}
+
 # ── Startup ───────────────────────────────────────────────────────────────────
 @app.on_event("startup")
 async def startup_event():
@@ -84,8 +112,12 @@ class ChatRequest(BaseModel):
     question: str
 
 
+class ChatAllRequest(BaseModel):
+    question: str
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# PDF / DOCUMENT MODE  (all existing endpoints preserved)
+# PDF / DOCUMENT MODE
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/", response_class=HTMLResponse)
@@ -99,13 +131,20 @@ async def serve_ui():
 
 @app.post("/upload")
 async def upload_file(file: UploadFile = File(...)):
-    """Upload a PDF, TXT, or DOCX file and ingest it into the PDF vector store."""
-    allowed = {".pdf", ".txt", ".docx", ".doc"}
+    """
+    Upload any supported document and ingest it into the vector store.
+
+    Supported: PDF (text + scanned/OCR), DOCX, TXT, XLSX, XLS, CSV, PPTX, PPT,
+               JPG, PNG, TIFF, BMP, WEBP
+    """
     ext = Path(file.filename).suffix.lower()
-    if ext not in allowed:
+    if ext not in ALLOWED_DOC_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"Unsupported file type '{ext}'. Allowed: {', '.join(allowed)}",
+            detail=(
+                f"Unsupported file type '{ext}'. "
+                f"Allowed: {', '.join(sorted(ALLOWED_DOC_EXTENSIONS))}"
+            ),
         )
 
     dest = UPLOAD_PDF_DIR / file.filename
@@ -123,13 +162,28 @@ async def upload_file(file: UploadFile = File(...)):
 
 @app.post("/chat")
 async def chat_endpoint(req: ChatRequest):
-    """Ask a question about an ingested document session."""
+    """Ask a question about a specific ingested document session."""
     if not req.question.strip():
         raise HTTPException(status_code=400, detail="Question cannot be empty")
     try:
         result = chat(req.session_id, req.question)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chat error: {e}")
+    return result
+
+
+@app.post("/chat/all")
+async def chat_all_endpoint(req: ChatAllRequest):
+    """
+    Ask a question across ALL uploaded documents — no session selection needed.
+    The system searches every document in the vector store and returns a unified answer.
+    """
+    if not req.question.strip():
+        raise HTTPException(status_code=400, detail="Question cannot be empty")
+    try:
+        result = chat_all(req.question)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Chat error: {e}")
     return result
@@ -148,6 +202,13 @@ async def clear_history(session_id: str):
     return {"status": "cleared", "session_id": session_id}
 
 
+@app.post("/clear-all")
+async def clear_all_endpoint():
+    """Clear the cross-document search history."""
+    clear_all_history()
+    return {"status": "cleared", "mode": "all_documents"}
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # INVOICE MODE
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -156,9 +217,7 @@ async def clear_history(session_id: str):
 async def invoice_upload(file: UploadFile = File(...)):
     """
     Upload and ingest an invoice PDF.
-
-    Pipeline: PDF text extraction → LLM field extraction (Groq) →
-    SQLite structured storage + Chroma semantic embeddings.
+    Supports both digitally-created PDFs and scanned/image-based PDFs (via OCR).
     """
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are supported for invoice ingestion.")
@@ -188,11 +247,13 @@ async def invoice_upload(file: UploadFile = File(...)):
 async def invoice_query(req: InvoiceQueryRequest):
     """
     Query invoices using hybrid retrieval (metadata filters + semantic search).
+    When no filters are provided, ALL stored invoices are searched automatically.
 
-    Supports natural language queries like:
+    Examples:
+    - "Show me all invoices"
     - "Show invoices above $1000"
     - "Find invoices from ABC Corp in March 2024"
-    - "Find similar invoices to this one"
+    - "Which vendor has the highest total?"
     """
     if not req.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")
@@ -222,40 +283,70 @@ async def invoice_compare(req: InvoiceCompareRequest):
     """
     Compare two invoices with structured diff and LLM explanation.
 
-    - Provide both invoice_id_a and invoice_id_b for direct comparison.
-    - Or provide invoice_id_a + query to auto-find the second invoice.
+    Modes:
+      1. Provide invoice_id_a + invoice_id_b → direct comparison
+      2. Provide invoice_id_a + query → auto-find the second invoice
+      3. Provide only a query → auto-find the best two matching invoices
     """
-    invoice_a = invoice_db.get_invoice(req.invoice_id_a)
-    if not invoice_a:
-        raise HTTPException(status_code=404, detail=f"Invoice '{req.invoice_id_a}' not found.")
-
-    # Resolve invoice_b
+    invoice_a = None
     invoice_b = None
-    if req.invoice_id_b:
-        invoice_b = invoice_db.get_invoice(req.invoice_id_b)
-        if not invoice_b:
-            raise HTTPException(status_code=404, detail=f"Invoice '{req.invoice_id_b}' not found.")
-    elif req.query:
-        # Auto-find second invoice via hybrid search, excluding invoice_a
-        from rag_api.invoice_engine import hybrid_invoice_search
+
+    # Mode 3: pure query — find both invoices automatically
+    if not req.invoice_id_a and req.query:
         parsed = parse_query(req.query)
-        candidates = hybrid_invoice_search(req.query, parsed, k=5)
-        candidates = [c for c in candidates if c.id != req.invoice_id_a]
-        if not candidates:
+        candidates = hybrid_invoice_search(req.query, parsed, k=10)
+
+        # If no semantic results, fall back to all invoices
+        if len(candidates) < 2:
+            candidates = invoice_db.list_invoices()
+
+        if len(candidates) < 2:
             raise HTTPException(
                 status_code=404,
-                detail="Could not find a second invoice matching your query. Please specify invoice_id_b.",
+                detail="Need at least 2 invoices to compare. Please upload more invoices.",
             )
-        invoice_b = candidates[0]
+        invoice_a = candidates[0]
+        invoice_b = candidates[1]
+
     else:
-        raise HTTPException(
-            status_code=400,
-            detail="Provide either invoice_id_b or a query to identify the second invoice.",
-        )
+        # Modes 1 & 2: invoice_id_a is required
+        if not req.invoice_id_a:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide either invoice_id_a or a query to identify the invoices.",
+            )
+        invoice_a = invoice_db.get_invoice(req.invoice_id_a)
+        if not invoice_a:
+            raise HTTPException(status_code=404, detail=f"Invoice '{req.invoice_id_a}' not found.")
+
+        if req.invoice_id_b:
+            invoice_b = invoice_db.get_invoice(req.invoice_id_b)
+            if not invoice_b:
+                raise HTTPException(status_code=404, detail=f"Invoice '{req.invoice_id_b}' not found.")
+        elif req.query:
+            parsed = parse_query(req.query)
+            candidates = hybrid_invoice_search(req.query, parsed, k=5)
+            candidates = [c for c in candidates if c.id != req.invoice_id_a]
+            if not candidates:
+                # Fallback: pick the second invoice from the full list
+                all_inv = invoice_db.list_invoices()
+                candidates = [i for i in all_inv if i.id != req.invoice_id_a]
+            if not candidates:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Could not find a second invoice. Please upload more invoices.",
+                )
+            invoice_b = candidates[0]
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Provide either invoice_id_b or a query to identify the second invoice.",
+            )
 
     try:
         result = compare_invoices(
-            invoice_a, invoice_b, user_query=req.query or "Compare these two invoices."
+            invoice_a, invoice_b,
+            user_query=req.query or f"Compare {invoice_a.vendor_name} with {invoice_b.vendor_name}."
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Comparison failed: {e}")

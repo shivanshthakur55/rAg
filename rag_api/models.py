@@ -68,11 +68,13 @@ class InvoiceQueryRequest(BaseModel):
 class InvoiceCompareRequest(BaseModel):
     """
     Compare two invoices.
-    - invoice_id_a: always required
-    - invoice_id_b: optional; if omitted, use `query` to find the second invoice
-    - query: e.g. 'Compare with last invoice from ABC Corp'
+
+    Modes:
+      1. invoice_id_a + invoice_id_b  → direct comparison between two known invoices
+      2. invoice_id_a + query         → compare first invoice against auto-found match
+      3. query only                   → auto-find the best two matching invoices and compare
     """
-    invoice_id_a: str
+    invoice_id_a: Optional[str] = None
     invoice_id_b: Optional[str] = None
     query: Optional[str] = None
 

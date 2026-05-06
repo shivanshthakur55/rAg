@@ -2,10 +2,11 @@
 Invoice Engine — Full pipeline for invoice ingestion, retrieval, and comparison.
 
 Pipeline:
-  1. PDF text extraction (PyPDF — no OCR since Tesseract is not installed)
+  1. PDF text extraction (PyPDF with OCR fallback via Tesseract for image-only PDFs)
   2. Structured field extraction via Groq LLM
   3. Storage: SQLite (structured) + Chroma (semantic embeddings)
   4. Hybrid retrieval: metadata filters (SQLite) + semantic search (Chroma)
+     → When no filters are active, ALL stored invoices are included automatically
   5. Invoice comparison: structured diff + LLM explanation
 """
 
@@ -18,7 +19,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
+import pytesseract
 from dotenv import load_dotenv
+
+# Force Tesseract path for Windows
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader
 from langchain_core.documents import Document
@@ -83,14 +88,54 @@ def _get_vector_store() -> Chroma:
 
 def extract_text_from_pdf(file_path: str) -> str:
     """
-    Extract raw text from a PDF using PyPDF.
-    Returns the concatenated text of all pages.
-    (No OCR — Tesseract is not installed in this environment.)
+    Extract raw text from an invoice PDF.
+    Strategy:
+      1. Try PyPDF (fast, works for digitally-created PDFs).
+      2. If extracted text is too short (<50 chars), fall back to Tesseract OCR
+         via pdf2image — handles scanned/image-only PDFs.
     """
     try:
         loader = PyPDFLoader(file_path)
         docs = loader.load()
-        return "\n".join(d.page_content for d in docs).strip()
+        text = "\n".join(d.page_content for d in docs).strip()
+        if len(text) >= 50:
+            return text
+        # Fall through to OCR below
+    except Exception:
+        pass
+
+    # OCR fallback using PyMuPDF (no Poppler needed)
+    try:
+        import fitz  # PyMuPDF
+        import pytesseract
+        from PIL import Image
+
+        # Force Tesseract path for Windows
+        pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+
+        doc = fitz.open(file_path)
+        pages = []
+        try:
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                mat = fitz.Matrix(2.0, 2.0)  # 2x scale for better OCR accuracy
+                pix = page.get_pixmap(matrix=mat)
+                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                page_text = pytesseract.image_to_string(img, lang="eng").strip()
+                if page_text:
+                    pages.append(page_text)
+        finally:
+            doc.close()
+        
+        text = "\n".join(pages).strip()
+        if text:
+            return text
+        raise RuntimeError("OCR produced no text from this PDF.")
+    except ImportError as e:
+        raise RuntimeError(
+            f"PyMuPDF or pytesseract not available: {e}. "
+            "Run: uv add pymupdf pytesseract"
+        ) from None
     except Exception as e:
         raise RuntimeError(f"Failed to extract text from PDF: {e}") from e
 
@@ -352,14 +397,36 @@ _INVOICE_QA_PROMPT = ChatPromptTemplate.from_messages([
 def answer_invoice_query(question: str, parsed: ParsedQuery) -> dict:
     """
     Find relevant invoices using hybrid search, then answer the question via LLM.
-    Returns {answer, invoices: [...]}
+
+    Search strategy:
+      - If the query has no specific metadata filters (vendor/date/amount) AND
+        no similarity intent → fetch ALL invoices so nothing is missed.
+      - Otherwise use hybrid retrieval (structured filters + semantic search).
+
+    Returns {answer, invoices: [...], total_searched: N}
     """
-    records = hybrid_invoice_search(question, parsed)
+    has_filters = any([
+        parsed.vendor_hint,
+        parsed.date_hint,
+        parsed.amount_min is not None,
+        parsed.amount_max is not None,
+    ])
+
+    if not has_filters and not parsed.similar_intent:
+        # No specific filters → use ALL stored invoices for full coverage
+        all_records = invoice_db.list_invoices()
+        records = all_records
+        search_mode = "all"
+    else:
+        # Filtered / similarity search
+        records = hybrid_invoice_search(question, parsed, k=50)  # generous cap
+        search_mode = "filtered"
 
     if not records:
         return {
-            "answer": "No invoices found matching your query. Try uploading invoices first.",
+            "answer": "No invoices found. Try uploading some invoice PDFs first.",
             "invoices": [],
+            "total_searched": 0,
         }
 
     # Build context from records
@@ -376,6 +443,7 @@ def answer_invoice_query(question: str, parsed: ParsedQuery) -> dict:
             )
         context_parts.append(
             f"Invoice ID: {r.id}\n"
+            f"  File: {r.original_filename}\n"
             f"  Vendor: {r.vendor_name}\n"
             f"  Date: {r.invoice_date}\n"
             f"  Total Amount: ${r.total_amount:.2f}"
@@ -389,6 +457,8 @@ def answer_invoice_query(question: str, parsed: ParsedQuery) -> dict:
     return {
         "answer": answer,
         "invoices": [_record_to_dict(r) for r in records],
+        "total_searched": len(records),
+        "search_mode": search_mode,
     }
 
 
