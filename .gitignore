@@ -5,9 +5,42 @@ build/
 dist/
 wheels/
 *.egg-info
+*.pyc
 
 # Virtual environments
 .venv
+venv/
+ENV/
+env/
 
 # Environment variables
 .env
+.env.*
+!.env.example
+
+# Vector databases and data (Local index and uploads)
+Vector/
+uploads/
+data/
+*.sqlite3
+*.bin
+*.pickle
+
+# Notebooks
+.ipynb_checkpoints
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
