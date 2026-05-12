@@ -164,6 +164,12 @@ def delete_invoice(invoice_id: str) -> bool:
         cur = con.execute("DELETE FROM invoices WHERE id = ?", (invoice_id,))
     return cur.rowcount > 0
 
+def clear_all_invoices() -> bool:
+    """Delete all invoices. Returns True if successful."""
+    with _conn() as con:
+        cur = con.execute("DELETE FROM invoices")
+    return True
+
 
 # ── Helper ────────────────────────────────────────────────────────────────────
 

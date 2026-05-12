@@ -1,0 +1,1 @@
+web:uvicorn rag_api.main:app --port $PORT

@@ -44,3 +44,9 @@ yarn-error.log*
 # OS files
 .DS_Store
 Thumbs.db
+
+# Experimentation & Prototyping
+*.ipynb
+
+# Local Documentation
+Docs/

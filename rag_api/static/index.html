@@ -478,7 +478,13 @@
       </div>
 
       <div class="list-section">
-        <div class="section-label">📋 Stored Invoices</div>
+        <div class="section-label" style="display: flex; justify-content: space-between; align-items: center;">
+          <span>📋 Stored Invoices</span>
+          <div style="display: flex; gap: 8px;">
+            <button id="clearInvoicesUiBtn" style="background: none; border: none; color: var(--text-muted); cursor: pointer; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; transition: color 0.2s;" onmouseover="this.style.color='var(--text-primary)'" onmouseout="this.style.color='var(--text-muted)'">🧹 Clear UI</button>
+            <button id="clearInvoicesDbBtn" style="background: none; border: none; color: var(--danger); opacity: 0.7; cursor: pointer; font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px; transition: opacity 0.2s;" onmouseover="this.style.opacity='1'" onmouseout="this.style.opacity='0.7'">🗑️ Clear DB</button>
+          </div>
+        </div>
         <div id="invoiceList">
           <div class="no-items">No invoices uploaded yet.</div>
         </div>
@@ -581,6 +587,7 @@ let selectedInvFile   = null;
 let isWaiting         = false;
 let selectedInvoices  = [];   // up to 2 for comparison
 let allInvoices       = [];   // cached list
+let hiddenInvoiceIds  = new Set(); // invoices cleared from UI
 
 // ── Elements ───────────────────────────────────────────────────────────────────
 const logoIcon        = document.getElementById('logoIcon');
@@ -623,6 +630,8 @@ const invSendBtn      = document.getElementById('invSendBtn');
 const invInputArea    = document.getElementById('invInputArea');
 const compareBtn      = document.getElementById('compareBtn');
 const compareHint     = document.getElementById('compareHint');
+const clearInvoicesUiBtn = document.getElementById('clearInvoicesUiBtn');
+const clearInvoicesDbBtn = document.getElementById('clearInvoicesDbBtn');
 
 // ── Mode switching ─────────────────────────────────────────────────────────────
 function switchMode(mode) {
@@ -864,11 +873,12 @@ async function fetchInvoiceList() {
 
 function renderInvoiceList() {
   invoiceList.innerHTML='';
-  if(!allInvoices.length){
-    invoiceList.innerHTML='<div class="no-items">No invoices uploaded yet.</div>';
+  const visibleInvoices = allInvoices.filter(inv => !hiddenInvoiceIds.has(inv.id));
+  if(!visibleInvoices.length){
+    invoiceList.innerHTML='<div class="no-items">No invoices visible.</div>';
     return;
   }
-  allInvoices.forEach(inv=>{
+  visibleInvoices.forEach(inv=>{
     const isSelected=selectedInvoices.some(s=>s.id===inv.id);
     const card=document.createElement('div');
     card.className='item-card'+(isSelected?' active':'');
@@ -887,6 +897,30 @@ function renderInvoiceList() {
 
 // Invoice cards are now informational; no selection needed
 function toggleInvoiceSelection(inv) { /* noop */ }
+
+if (clearInvoicesUiBtn) {
+  clearInvoicesUiBtn.addEventListener('click', () => {
+    allInvoices.forEach(inv => hiddenInvoiceIds.add(inv.id));
+    renderInvoiceList();
+    toast('Invoices cleared from UI (kept in DB)', 'info');
+  });
+}
+
+if (clearInvoicesDbBtn) {
+  clearInvoicesDbBtn.addEventListener('click', async () => {
+    if(!confirm('Are you sure you want to permanently delete ALL invoices from the database? This cannot be undone.')) return;
+    try {
+      const res = await fetch('/invoice/clear-all', {method: 'POST'});
+      if(!res.ok) throw new Error('Failed to clear DB');
+      allInvoices = [];
+      hiddenInvoiceIds.clear();
+      renderInvoiceList();
+      toast('All invoices permanently deleted from DB', 'success');
+    } catch(e) {
+      toast(e.message, 'error');
+    }
+  });
+}
 
 // Search All Documents mode
 let searchAllMode = false;

@@ -381,6 +381,12 @@ async def invoice_delete(invoice_id: str):
         raise HTTPException(status_code=404, detail=f"Invoice '{invoice_id}' not found.")
     return {"status": "deleted", "invoice_id": invoice_id}
 
+@app.post("/invoice/clear-all")
+async def invoice_clear_all():
+    """Clear all invoices from DB."""
+    invoice_db.clear_all_invoices()
+    return {"status": "cleared", "mode": "all_invoices"}
+
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
