@@ -26,8 +26,14 @@ from typing import Optional
 import pytesseract
 from dotenv import load_dotenv
 
-# Force Tesseract path for Windows
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+import os
+import sys
+
+# Force Tesseract path for Windows, default to system path on Linux (Render)
+if sys.platform == "win32":
+    pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
+else:
+    pytesseract.pytesseract.tesseract_cmd = 'tesseract'
 
 from langchain_chroma import Chroma
 from langchain_community.document_loaders import PyPDFLoader, TextLoader, Docx2txtLoader
