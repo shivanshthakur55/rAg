@@ -49,4 +49,8 @@ Thumbs.db
 *.ipynb
 
 # Local Documentation
+
 Docs/
+1.0_rag_own_text.ipynb
+2.0_rag_on_pdf.ipynb
+3.0_rag_on_docx.ipynb
